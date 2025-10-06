@@ -1,0 +1,92 @@
+{
+  "b0_inhomogeneity": {
+    "description": "B0 Field Inhomogeneity Analysis",
+    "dual_echo_structure": true,
+    "base_sequences": {
+      "phase_folder": {
+        "sequence_patterns": ["t1_fl3d_tra_2echos"],
+        "contains_echoes": [1, 2],
+        "image_type": "phase",
+        "description": "Folder containing both TE1 and TE2 phase images"
+      },
+      "magnitude_folder": {
+        "sequence_patterns": ["t1_fl3d_tra_2echos"],
+        "contains_echoes": [1, 2], 
+        "image_type": "magnitude",
+        "description": "Folder containing both TE1 and TE2 magnitude images"
+      }
+    },
+    "sequences": {
+      "te1_phase": {
+        "source_folder": "phase_folder",
+        "echo_number": 1,
+        "image_type": "phase",
+        "description": "TE1 phase images for B0 mapping"
+      },
+      "te2_phase": {
+        "source_folder": "phase_folder",
+        "echo_number": 2,
+        "image_type": "phase", 
+        "description": "TE2 phase images for B0 mapping"
+      },
+      "te1_magnitude": {
+        "source_folder": "magnitude_folder",
+        "echo_number": 1,
+        "image_type": "magnitude",
+        "description": "TE1 magnitude images for masking"
+      }
+    }
+  },
+  "epi_stability": {
+    "description": "EPI Stability Analysis",
+    "sequences": {
+      "epi_series": {
+        "sequence_patterns": ["epi_stability", "ep2d_bold", "fmri_stability"],
+        "image_type": "magnitude",
+        "description": "EPI time series for stability analysis"
+      }
+    }
+  },
+  "geometric_distortion": {
+    "description": "Geometric Distortion Analysis", 
+    "sequences": {
+      "spin_echo": {
+        "sequence_patterns": ["se_geometric", "t1_se", "spin_echo_geo"],
+        "image_type": "magnitude",
+        "description": "Spin echo reference for geometric accuracy"
+      },
+      "gradient_echo": {
+        "sequence_patterns": ["gre_geometric", "t1_gre", "gradient_echo_geo"],
+        "image_type": "magnitude", 
+        "description": "Gradient echo for distortion comparison"
+      }
+    }
+  },
+  "snr_parallel_imaging": {
+    "description": "SNR and Parallel Imaging Analysis",
+    "sequences": {
+      "reference_no_accel": {
+        "sequence_patterns": ["ref_no_acceleration", "no_grappa", "sense_r1"],
+        "image_type": "magnitude",
+        "acceleration_factor": 1,
+        "description": "Reference images without acceleration"
+      },
+      "accelerated": {
+        "sequence_patterns": ["accelerated", "grappa", "sense"],
+        "image_type": "magnitude",
+        "acceleration_factor": ">1",
+        "description": "Accelerated images for SNR comparison"
+      }
+    }
+  },
+  "ghost_ratio": {
+    "description": "Ghost Ratio Analysis",
+    "sequences": {
+      "epi_ghost": {
+        "sequence_patterns": ["epi_ghost", "ep2d_ghost", "nyquist_ghost"],
+        "image_type": "magnitude",
+        "description": "EPI sequence for ghost ratio measurement"
+      }
+    }
+  }
+}
