@@ -1,0 +1,12 @@
+name: QA_MRI
+channels:
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python
+  - numpy
+  - matplotlib
+  - scipy
+  - pydicom
+prefix: /opt/anaconda3/envs/QA_MRI
