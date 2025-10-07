@@ -48,17 +48,18 @@
     }
   },
   "geometric_distortion": {
-    "description": "Geometric Distortion Analysis", 
+    "description": "Geometric Distortion Analysis",
+    "slice_number": 20,
     "sequences": {
-      "spin_echo": {
-        "sequence_patterns": ["se_geometric", "t1_se", "spin_echo_geo"],
+      "turbo_spin_echo": {
+        "sequence_patterns": ["tse"],
         "image_type": "magnitude",
-        "description": "Spin echo reference for geometric accuracy"
+        "description": "Turbo Spin Echo reference for geometric accuracy"
       },
-      "gradient_echo": {
-        "sequence_patterns": ["gre_geometric", "t1_gre", "gradient_echo_geo"],
+      "epi": {
+        "sequence_patterns": ["ep2d"],
         "image_type": "magnitude", 
-        "description": "Gradient echo for distortion comparison"
+        "description": "EPI images for distortion comparison"
       }
     }
   },
@@ -81,6 +82,7 @@
   },
   "ghost_ratio": {
     "description": "Ghost Ratio Analysis",
+    "slice_number": 20,
     "sequences": {
       "epi": {
         "sequence_patterns": ["ep2d_fid_distorsion_geo"],

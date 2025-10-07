@@ -282,14 +282,18 @@ def main():
         print(style.RED + "No sequences loaded. Exiting." + style.RESET)
         return
 
-    # Determine slice number based on station name (from original logic)
-    slice_number = 20  # Default
-    if 'EPI' in sequences:
-        station = sequences['EPI']['metadata'].get('station_name', '')
-        if station == 'AWP183025':
-            slice_number = 20
-        else:
-            slice_number = 20
+    # Determine slice number - use config value if available
+    slice_number = dicom_reader.get_slice_number_for_test('ghost_ratio')
+    if slice_number is None:
+        slice_number = 20  # Default fallback
+
+        # Legacy logic: check station name
+        if 'EPI' in sequences:
+            station = sequences['EPI']['metadata'].get('station_name', '')
+            if station == 'AWP183025':
+                slice_number = 20
+            else:
+                slice_number = 20
 
     print(style.CYAN + f"Analyzing slice: {slice_number}" + style.RESET)
 

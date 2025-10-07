@@ -4,7 +4,8 @@ import json
 import pydicom as dcm
 import tkinter as tk
 from tkinter import filedialog
-from typing import List, Tuple, Optional, Union, Dict
+from typing import List, Tuple, Optional, Dict
+from collections import defaultdict
 
 
 class ConsoleStyle:
@@ -23,19 +24,19 @@ class ConsoleStyle:
 
 class DicomReader:
     """Handles DICOM directory selection, file discovery, and reading operations."""
-    
+
     def __init__(self, config_file: str = None):
         os.system("")  # Enable color output in command window
         self.style = ConsoleStyle()
         self.config = self._load_config(config_file) if config_file else None
-    
+
     def select_dicom_directory(self, prompt: str = "Select DICOM directory") -> str:
         """
         Open file dialog to select DICOM directory.
-        
+
         Args:
             prompt: Message to display before directory selection
-            
+
         Returns:
             Selected directory path
         """
@@ -44,14 +45,14 @@ class DicomReader:
         root.withdraw()
         path = filedialog.askdirectory()
         return path
-    
+
     def find_dicom_files(self, directory: str) -> List[str]:
         """
         Find all DICOM files in directory and subdirectories.
-        
+
         Args:
             directory: Directory path to search
-            
+
         Returns:
             List of DICOM file paths
         """
@@ -61,14 +62,14 @@ class DicomReader:
                 if ".dcm" in filename.lower():
                     dicom_files.append(os.path.join(dir_name, filename))
         return dicom_files
-    
+
     def check_export_error(self, ref_dataset: dcm.Dataset) -> bool:
         """
         Check for DICOM export error (missing row of pixels).
-        
+
         Args:
             ref_dataset: Reference DICOM dataset
-            
+
         Returns:
             True if export error detected, False otherwise
         """
@@ -76,14 +77,14 @@ class DicomReader:
             print(self.style.RED + 'DICOM export error detected. Will pad missing row of pixels with zeros' + self.style.RESET)
             return True
         return False
-    
+
     def get_dicom_metadata(self, dicom_file: str) -> dict:
         """
         Extract common metadata from DICOM file.
-        
+
         Args:
             dicom_file: Path to DICOM file
-            
+
         Returns:
             Dictionary containing metadata
         """
@@ -104,47 +105,46 @@ class DicomReader:
             'series_number': getattr(dataset, 'SeriesNumber', None)
         }
         return metadata
-    
-    def load_dicom_series(self, dicom_files: List[str], 
+
+    def load_dicom_series(self, dicom_files: List[str],
                          station_specific: bool = True) -> Tuple[np.ndarray, dict, bool]:
         """
         Load DICOM series into numpy array with proper slice ordering.
-        
+
         Args:
             dicom_files: List of DICOM file paths
             station_specific: Whether to apply station-specific ordering logic
-            
+
         Returns:
             Tuple of (dicom_array, metadata, export_error_flag)
         """
         if not dicom_files:
             raise ValueError("No DICOM files provided")
-        
+
         # Get reference dataset and metadata
         ref_dataset = dcm.dcmread(dicom_files[0])
         export_error = self.check_export_error(ref_dataset)
         metadata = self.get_dicom_metadata(dicom_files[0])
-        
+
         # Create array dimensions
         dims = (metadata['rows'], metadata['columns'], len(dicom_files))
         dicom_array = np.zeros(dims, dtype=ref_dataset.pixel_array.dtype)
-        
+
         print(f"MRI Scan mode: {metadata['acquisition_type']}")
-        
+
         # Load pixel data with proper indexing
-        # First, collect all instance numbers to create a mapping
         instance_mapping = {}
         for i, file_path in enumerate(dicom_files):
             dataset = dcm.dcmread(file_path)
             inst_num = dataset.InstanceNumber
             instance_mapping[inst_num] = i
-        
+
         # Sort by instance number and load data sequentially
         sorted_instances = sorted(instance_mapping.keys())
-        
+
         if len(sorted_instances) != len(dicom_files):
             print(f"{self.style.YELLOW}Warning: Instance number mismatch. Expected {len(dicom_files)}, got {len(sorted_instances)}{self.style.RESET}")
-        
+
         for slice_idx, inst_num in enumerate(sorted_instances):
             if slice_idx >= dicom_array.shape[2]:
                 print(f"{self.style.RED}Warning: Too many slices for array size. Skipping instance {inst_num}{self.style.RESET}")
@@ -152,49 +152,49 @@ class DicomReader:
             file_path = dicom_files[instance_mapping[inst_num]]
             dataset = dcm.dcmread(file_path)
             dicom_array[:, :, slice_idx] = dataset.pixel_array
-        
+
         # Handle export error by padding with zeros
         if export_error:
             corrected_shape = (metadata['rows'] + 1, metadata['columns'], len(dicom_files))
             corrected_array = np.zeros(corrected_shape)
             corrected_array[1:, :, :] = dicom_array
             dicom_array = corrected_array
-        
+
         print(f'MRI dataset size: {np.shape(dicom_array)}')
         return dicom_array, metadata, export_error
-    
+
     def load_multi_acquisition_series(self, dicom_files: List[str]) -> Tuple[np.ndarray, dict]:
         """
         Load DICOM series with multiple acquisitions (e.g., for EPI stability analysis).
-        
+
         Args:
             dicom_files: List of DICOM file paths
-            
+
         Returns:
             Tuple of (4D dicom_array, metadata)
         """
         if not dicom_files:
             raise ValueError("No DICOM files provided")
-        
+
         # Determine acquisition structure
         max_acq_num = 0
         metadata = {}
-        
+
         for file_path in dicom_files:
             dataset = dcm.dcmread(file_path)
             if max_acq_num < int(dataset.AcquisitionNumber):
                 max_acq_num = int(dataset.AcquisitionNumber)
-                if not metadata:  # Store metadata from first file
+                if not metadata:
                     metadata = self.get_dicom_metadata(file_path)
-        
+
         total_slices = len(dicom_files) // max_acq_num
         dims = (metadata['rows'], metadata['columns'], total_slices, max_acq_num)
         dicom_array = np.zeros(dims)
-        
+
         print(f'Total slices: {total_slices}')
         print(f'Max acquisition number: {max_acq_num}')
         print(f'Total images: {len(dicom_files)}')
-        
+
         # Load data with proper indexing
         for file_path in dicom_files:
             dataset = dcm.dcmread(file_path)
@@ -202,10 +202,10 @@ class DicomReader:
             acq_num = int(dataset.AcquisitionNumber)
             slice_num = total_slices - ((acq_num * total_slices) - inst_num)
             dicom_array[:, :, slice_num - 1, acq_num - 1] = dataset.pixel_array
-        
+
         print(f'MRI dataset size: {np.shape(dicom_array)}')
         return dicom_array, metadata
-    
+
     def _load_config(self, config_file: str) -> Dict:
         """Load sequence configuration from JSON file."""
         try:
@@ -214,238 +214,273 @@ class DicomReader:
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"{self.style.RED}Error loading config file {config_file}: {e}{self.style.RESET}")
             return {}
-    
+
+    def _group_files_by_property(self, files: List[str], property_func) -> Dict:
+        """
+        Group DICOM files by a specific property.
+
+        Args:
+            files: List of DICOM file paths
+            property_func: Function that takes a dataset and returns grouping key
+
+        Returns:
+            Dictionary mapping property values to file lists
+        """
+        groups = defaultdict(list)
+        for file_path in files:
+            try:
+                dataset = dcm.dcmread(file_path)
+                key = property_func(dataset)
+                groups[key].append(file_path)
+            except Exception as e:
+                print(f"{self.style.RED}Error reading {file_path}: {e}{self.style.RESET}")
+        return dict(groups)
+
+    def _separate_files_by_echo(self, files: List[str], target_echo: int) -> List[str]:
+        """
+        Separate files by echo time and return files for target echo.
+
+        Args:
+            files: List of DICOM file paths
+            target_echo: Target echo number (1-indexed)
+
+        Returns:
+            List of files for target echo
+        """
+        echo_groups = self._group_files_by_property(
+            files,
+            lambda ds: getattr(ds, 'EchoTime', 0)
+        )
+
+        sorted_echoes = sorted(echo_groups.keys())
+        if len(sorted_echoes) < target_echo:
+            print(f"{self.style.RED}Not enough echoes. Found {len(sorted_echoes)}, need {target_echo}{self.style.RESET}")
+            return []
+
+        target_echo_time = sorted_echoes[target_echo - 1]
+        print(f"{self.style.GREEN}Found TE{target_echo} with {len(echo_groups[target_echo_time])} files (TE={target_echo_time}ms){self.style.RESET}")
+        return echo_groups[target_echo_time]
+
+    def _find_directories_with_dicoms(self, base_directory: str) -> Dict[str, str]:
+        """
+        Find all directories containing DICOM files.
+
+        Args:
+            base_directory: Base directory to search
+
+        Returns:
+            Dictionary mapping directory names to paths
+        """
+        dicom_dirs = {}
+        for root, dirs, files in os.walk(base_directory):
+            if any(f.lower().endswith('.dcm') for f in files):
+                dir_name = os.path.basename(root).lower()
+                dicom_dirs[dir_name] = root
+        return dicom_dirs
+
+    def _match_directory_to_patterns(self, dir_name: str, patterns: List[str]) -> bool:
+        """Check if directory name matches any pattern."""
+        return any(pattern.lower() in dir_name for pattern in patterns)
+
     def find_sequences_in_directory(self, base_directory: str, qa_test: str) -> Dict[str, str]:
         """
         Automatically find sequence directories based on configuration.
-        
+
         Args:
-            base_directory: Base directory containing all sequences for the test session
-            qa_test: Name of the QA test (e.g., 'b0_inhomogeneity')
-            
+            base_directory: Base directory containing all sequences
+            qa_test: Name of the QA test
+
         Returns:
             Dictionary mapping sequence roles to directory paths
         """
         if not self.config or qa_test not in self.config:
             print(f"{self.style.RED}No configuration found for QA test: {qa_test}{self.style.RESET}")
             return {}
-        
+
         test_config = self.config[qa_test]['sequences']
         sequence_paths = {}
-        
+
         print(f"{self.style.BLUE}Searching for sequences in: {base_directory}{self.style.RESET}")
-        
-        # Walk through all subdirectories to find matching sequences
-        for root, dirs, files in os.walk(base_directory):
-            # Check if this directory contains DICOM files
-            if any(f.lower().endswith('.dcm') for f in files):
-                dir_name = os.path.basename(root).lower()
-                
-                # Try to match this directory to a sequence role
-                for role, seq_config in test_config.items():
-                    if role not in sequence_paths:  # Only assign if not already found
-                        for pattern in seq_config['sequence_patterns']:
-                            if pattern.lower() in dir_name:
-                                sequence_paths[role] = root
-                                print(f"{self.style.GREEN}Found {role}: {root}{self.style.RESET}")
-                                break
-        
+
+        # Find all directories with DICOM files
+        dicom_dirs = self._find_directories_with_dicoms(base_directory)
+
+        # Match directories to sequence roles
+        for role, seq_config in test_config.items():
+            for dir_name, dir_path in dicom_dirs.items():
+                if role not in sequence_paths:
+                    if self._match_directory_to_patterns(dir_name, seq_config['sequence_patterns']):
+                        sequence_paths[role] = dir_path
+                        print(f"{self.style.GREEN}Found {role}: {dir_path}{self.style.RESET}")
+                        break
+
         # Report missing sequences
         missing = set(test_config.keys()) - set(sequence_paths.keys())
         if missing:
             print(f"{self.style.YELLOW}Warning: Could not find sequences for: {', '.join(missing)}{self.style.RESET}")
-        
+
         return sequence_paths
-    
+
+    def _load_sequence_with_echo_separation(self, files: List[str], seq_config: dict) -> Tuple[np.ndarray, dict, bool]:
+        """
+        Load a sequence, separating by echo time if needed.
+
+        Args:
+            files: List of DICOM file paths
+            seq_config: Sequence configuration dictionary
+
+        Returns:
+            Tuple of (data, metadata, export_error)
+        """
+        # Check if echo separation is needed
+        if 'echo_number' in seq_config:
+            target_echo = seq_config['echo_number']
+            files = self._separate_files_by_echo(files, target_echo)
+            if not files:
+                raise ValueError(f"No files found for echo {target_echo}")
+
+        return self.load_dicom_series(files)
+
+    def get_slice_number_for_test(self, qa_test: str) -> Optional[int]:
+        """
+        Get the recommended slice number for a QA test from config.
+
+        Args:
+            qa_test: Name of the QA test
+
+        Returns:
+            Slice number if specified in config, None otherwise
+        """
+        if self.config and qa_test in self.config:
+            return self.config[qa_test].get('slice_number', None)
+        return None
+
     def load_qa_sequences(self, base_directory: str, qa_test: str) -> Dict[str, Tuple[np.ndarray, dict, bool]]:
         """
         Load all required sequences for a QA test automatically.
-        Handles both separated sequences and mixed multi-echo sequences.
-        
+        Handles separated sequences, multi-echo, and dual-echo structures.
+
         Args:
             base_directory: Base directory containing all sequences
             qa_test: Name of the QA test
-            
+
         Returns:
             Dictionary mapping sequence roles to loaded data
         """
         if not base_directory:
             base_directory = self.select_dicom_directory(f"Select base directory for {qa_test} QA test")
-        
+
         if not self.config or qa_test not in self.config:
             print(f"{self.style.RED}No configuration found for QA test: {qa_test}{self.style.RESET}")
             return {}
-        
+
         test_config = self.config[qa_test]
-        
-        # Check if this test uses dual-echo structure (phase/magnitude folders)
+
+        # Display slice number if configured
+        slice_num = self.get_slice_number_for_test(qa_test)
+        if slice_num is not None:
+            print(f"{self.style.CYAN}Configured slice number for {qa_test}: {slice_num}{self.style.RESET}")
+
+        # Check for dual-echo structure (special case: phase/magnitude folders)
         if test_config.get('dual_echo_structure', False):
-            print(f"{self.style.BLUE}Loading dual-echo sequence structure...{self.style.RESET}")
-            return self.load_dual_echo_sequences(base_directory, qa_test)
-        
-        # Check if this test uses mixed sequences
-        if 'mixed_sequence_patterns' in test_config:
-            print(f"{self.style.BLUE}Checking for mixed multi-echo sequences...{self.style.RESET}")
-            
-            # Look for mixed sequence directory
-            mixed_dir = None
-            for root, dirs, files in os.walk(base_directory):
-                if any(f.lower().endswith('.dcm') for f in files):
-                    dir_name = os.path.basename(root).lower()
-                    for pattern in test_config['mixed_sequence_patterns']:
-                        if pattern.lower() in dir_name:
-                            mixed_dir = root
-                            print(f"{self.style.GREEN}Found mixed sequence directory: {mixed_dir}{self.style.RESET}")
-                            break
-                    if mixed_dir:
-                        break
-            
-            # If mixed directory found, use multi-echo loading
-            if mixed_dir:
-                return self.load_multi_echo_sequence(mixed_dir, qa_test)
-        
-        # Fallback to standard separated sequence loading
-        print(f"{self.style.BLUE}Loading separated sequences...{self.style.RESET}")
+            return self._load_dual_echo_structure(base_directory, qa_test)
+
+        # Standard loading: find sequence directories
         sequence_paths = self.find_sequences_in_directory(base_directory, qa_test)
         loaded_sequences = {}
-        
+
         for role, path in sequence_paths.items():
             print(f"{self.style.CYAN}Loading {role} from {path}{self.style.RESET}")
             files = self.find_dicom_files(path)
             if files:
                 try:
-                    data, metadata, export_error = self.load_dicom_series(files)
+                    seq_config = test_config['sequences'][role]
+                    data, metadata, export_error = self._load_sequence_with_echo_separation(files, seq_config)
                     loaded_sequences[role] = (data, metadata, export_error)
                 except Exception as e:
                     print(f"{self.style.RED}Error loading {role}: {e}{self.style.RESET}")
             else:
                 print(f"{self.style.RED}No DICOM files found in {path}{self.style.RESET}")
-        
+
         return loaded_sequences
-    
-    def load_dual_echo_sequences(self, base_directory: str, qa_test: str) -> Dict[str, Tuple[np.ndarray, dict, bool]]:
+
+    def _load_dual_echo_structure(self, base_directory: str, qa_test: str) -> Dict[str, Tuple[np.ndarray, dict, bool]]:
         """
-        Load dual-echo sequences where phase and magnitude folders each contain both echoes.
-        
+        Load dual-echo sequences where phase/magnitude folders each contain multiple echoes.
+
         Args:
             base_directory: Base directory containing phase and magnitude folders
             qa_test: Name of the QA test
-            
+
         Returns:
             Dictionary mapping sequence roles to loaded data
         """
         test_config = self.config[qa_test]
-        base_sequences = test_config['base_sequences']
-        
-        # Find phase and magnitude folders by examining DICOM ImageType
+
+        print(f"{self.style.BLUE}Loading dual-echo sequence structure...{self.style.RESET}")
+
+        # Find phase and magnitude folders by ImageType
+        dicom_dirs = self._find_directories_with_dicoms(base_directory)
         found_folders = {}
-        for root, dirs, files in os.walk(base_directory):
-            dicom_files = [f for f in files if f.lower().endswith('.dcm')]
-            if dicom_files:
-                dir_name = os.path.basename(root).lower()
-                
-                # Check if directory name matches any sequence pattern
-                matches_pattern = False
-                for folder_type, folder_config in base_sequences.items():
-                    for pattern in folder_config['sequence_patterns']:
-                        if pattern.lower() in dir_name:
-                            matches_pattern = True
-                            break
-                    if matches_pattern:
-                        break
-                
-                if matches_pattern:
-                    # Examine a sample DICOM file to determine image type
-                    try:
-                        sample_file = os.path.join(root, dicom_files[0])
-                        dataset = dcm.dcmread(sample_file)
-                        
-                        if hasattr(dataset, 'ImageType') and len(dataset.ImageType) > 2:
-                            image_type_tag = dataset.ImageType[2]
-                            
-                            if image_type_tag == 'P' and 'phase_folder' not in found_folders:
-                                found_folders['phase_folder'] = root
-                                print(f"{self.style.GREEN}Found phase_folder: {root} (ImageType: {image_type_tag}){self.style.RESET}")
-                            elif image_type_tag == 'M' and 'magnitude_folder' not in found_folders:
-                                found_folders['magnitude_folder'] = root
-                                print(f"{self.style.GREEN}Found magnitude_folder: {root} (ImageType: {image_type_tag}){self.style.RESET}")
-                            else:
-                                print(f"{self.style.YELLOW}Unknown or duplicate ImageType: {image_type_tag} in {root}{self.style.RESET}")
-                        else:
-                            print(f"{self.style.YELLOW}No ImageType found in {sample_file}{self.style.RESET}")
-                    except Exception as e:
-                        print(f"{self.style.RED}Error reading {sample_file}: {e}{self.style.RESET}")
-        
-        if len(found_folders) != len(base_sequences):
-            missing = set(base_sequences.keys()) - set(found_folders.keys())
-            print(f"{self.style.RED}Missing folders: {', '.join(missing)}{self.style.RESET}")
-            return {}
-        
-        # Separate echoes within each folder and load required sequences
-        loaded_sequences = {}
-        sequences_config = test_config['sequences']
-        
-        for seq_name, seq_config in sequences_config.items():
-            source_folder_type = seq_config['source_folder']
-            target_echo = seq_config['echo_number']
-            
-            if source_folder_type not in found_folders:
-                print(f"{self.style.RED}Source folder {source_folder_type} not found for {seq_name}{self.style.RESET}")
+
+        for dir_name, dir_path in dicom_dirs.items():
+            # Check if matches base sequence patterns
+            matches_any = False
+            for folder_type, folder_config in test_config['base_sequences'].items():
+                if self._match_directory_to_patterns(dir_name, folder_config['sequence_patterns']):
+                    matches_any = True
+                    break
+
+            if not matches_any:
                 continue
-            
-            folder_path = found_folders[source_folder_type]
-            print(f"{self.style.CYAN}Loading {seq_name} (TE{target_echo}) from {folder_path}{self.style.RESET}")
-            
-            # Get all files and separate by echo time
-            all_files = self.find_dicom_files(folder_path)
-            if not all_files:
-                print(f"{self.style.RED}No DICOM files found in {folder_path}{self.style.RESET}")
-                continue
-            
-            # Group files by echo time
-            echo_groups = {}
-            for file_path in all_files:
+
+            # Determine if phase or magnitude by examining ImageType
+            files = self.find_dicom_files(dir_path)
+            if files:
                 try:
-                    dataset = dcm.dcmread(file_path)
-                    echo_time = getattr(dataset, 'EchoTime', 0)
-                    
-                    if echo_time not in echo_groups:
-                        echo_groups[echo_time] = []
-                    echo_groups[echo_time].append(file_path)
+                    dataset = dcm.dcmread(files[0])
+                    if hasattr(dataset, 'ImageType') and len(dataset.ImageType) > 2:
+                        image_type = dataset.ImageType[2]
+                        if image_type == 'P':
+                            found_folders['phase_folder'] = dir_path
+                            print(f"{self.style.GREEN}Found phase_folder: {dir_path}{self.style.RESET}")
+                        elif image_type == 'M':
+                            found_folders['magnitude_folder'] = dir_path
+                            print(f"{self.style.GREEN}Found magnitude_folder: {dir_path}{self.style.RESET}")
                 except Exception as e:
-                    print(f"{self.style.RED}Error reading {file_path}: {e}{self.style.RESET}")
-            
-            # Sort echo times and find target echo
-            sorted_echoes = sorted(echo_groups.keys())
-            if len(sorted_echoes) < target_echo:
-                print(f"{self.style.RED}Not enough echoes found for {seq_name}. Found {len(sorted_echoes)}, need {target_echo}{self.style.RESET}")
+                    print(f"{self.style.RED}Error reading {files[0]}: {e}{self.style.RESET}")
+
+        # Load required sequences
+        loaded_sequences = {}
+        for seq_name, seq_config in test_config['sequences'].items():
+            source_folder = seq_config['source_folder']
+
+            if source_folder not in found_folders:
+                print(f"{self.style.RED}Source folder {source_folder} not found for {seq_name}{self.style.RESET}")
                 continue
-            
-            # Get files for target echo (1-indexed)
-            target_echo_time = sorted_echoes[target_echo - 1]
-            target_files = echo_groups[target_echo_time]
-            
-            print(f"{self.style.GREEN}Found TE{target_echo} with {len(target_files)} files (TE={target_echo_time}ms){self.style.RESET}")
-            
-            # Load the data
-            try:
-                data, metadata, export_error = self.load_dicom_series(target_files)
-                loaded_sequences[seq_name] = (data, metadata, export_error)
-            except Exception as e:
-                print(f"{self.style.RED}Error loading {seq_name}: {e}{self.style.RESET}")
-        
+
+            folder_path = found_folders[source_folder]
+            print(f"{self.style.CYAN}Loading {seq_name} from {folder_path}{self.style.RESET}")
+
+            files = self.find_dicom_files(folder_path)
+            if files:
+                try:
+                    data, metadata, export_error = self._load_sequence_with_echo_separation(files, seq_config)
+                    loaded_sequences[seq_name] = (data, metadata, export_error)
+                except Exception as e:
+                    print(f"{self.style.RED}Error loading {seq_name}: {e}{self.style.RESET}")
+
         return loaded_sequences
-    
-    def sort_mixed_sequence_directory(self, source_directory: str, 
+
+    def sort_mixed_sequence_directory(self, source_directory: str,
                                     create_subfolders: bool = True) -> Dict[str, List[str]]:
         """
         Sort mixed DICOM files by protocol, echo time, and image type.
-        Based on dcmsort_v2.py logic.
-        
+
         Args:
             source_directory: Directory containing mixed DICOM files
             create_subfolders: Whether to create sorted subdirectories
-            
+
         Returns:
             Dictionary mapping sorted categories to file lists
         """
@@ -453,128 +488,46 @@ class DicomReader:
         if not dicom_files:
             print(f"{self.style.RED}No DICOM files found in {source_directory}{self.style.RESET}")
             return {}
-        
+
         print(f"{self.style.BLUE}Sorting {len(dicom_files)} DICOM files...{self.style.RESET}")
-        
+
         # Group files by sorting criteria
-        sorted_groups = {}
-        
-        for file_path in dicom_files:
-            try:
-                dataset = dcm.dcmread(file_path)
-                
-                # Extract sorting criteria
-                protocol_name = getattr(dataset, 'ProtocolName', 'Unknown')
-                series_number = getattr(dataset, 'SeriesNumber', 0)
-                echo_time = getattr(dataset, 'EchoTime', 0)
-                scan_date = getattr(dataset, 'PerformedProcedureStepStartDate', 'Unknown')
-                
-                # Get image type (phase/magnitude)
-                image_type = 'Unknown'
-                if hasattr(dataset, 'ImageType') and len(dataset.ImageType) > 2:
-                    image_type = dataset.ImageType[2]
-                
-                # Create sorting key
-                sort_key = f"{protocol_name}_{scan_date}_{series_number}_{echo_time}_{image_type}"
-                
-                if sort_key not in sorted_groups:
-                    sorted_groups[sort_key] = []
-                sorted_groups[sort_key].append(file_path)
-                
-            except Exception as e:
-                print(f"{self.style.RED}Error reading {file_path}: {e}{self.style.RESET}")
-        
+        def get_sort_key(dataset):
+            protocol = getattr(dataset, 'ProtocolName', 'Unknown')
+            series = getattr(dataset, 'SeriesNumber', 0)
+            echo = getattr(dataset, 'EchoTime', 0)
+            date = getattr(dataset, 'PerformedProcedureStepStartDate', 'Unknown')
+            img_type = dataset.ImageType[2] if hasattr(dataset, 'ImageType') and len(dataset.ImageType) > 2 else 'Unknown'
+            return f"{protocol}_{date}_{series}_{echo}_{img_type}"
+
+        sorted_groups = self._group_files_by_property(dicom_files, get_sort_key)
+
         # Create subdirectories if requested
         if create_subfolders:
+            import shutil
             for sort_key, file_list in sorted_groups.items():
                 subfolder_path = os.path.join(source_directory, sort_key)
-                
                 if not os.path.exists(subfolder_path):
                     os.makedirs(subfolder_path)
                     print(f"{self.style.GREEN}Created: {subfolder_path}{self.style.RESET}")
-                
-                # Copy files to subfolder (keeping originals)
+
                 for file_path in file_list:
                     filename = os.path.basename(file_path)
                     dest_path = os.path.join(subfolder_path, filename)
                     if not os.path.exists(dest_path):
-                        import shutil
                         shutil.copy2(file_path, dest_path)
-        
+
         print(f"{self.style.GREEN}Sorted into {len(sorted_groups)} groups{self.style.RESET}")
         return sorted_groups
-    
-    def load_multi_echo_sequence(self, mixed_directory: str, qa_test: str) -> Dict[str, Tuple[np.ndarray, dict, bool]]:
-        """
-        Load multi-echo sequences that are mixed in a single directory.
-        Automatically sorts and extracts required image types.
-        
-        Args:
-            mixed_directory: Directory containing mixed echo/image type files
-            qa_test: Name of the QA test to determine required sequences
-            
-        Returns:
-            Dictionary mapping sequence roles to loaded data
-        """
-        print(f"{self.style.CYAN}Processing mixed multi-echo directory: {mixed_directory}{self.style.RESET}")
-        
-        # Sort the mixed directory
-        sorted_groups = self.sort_mixed_sequence_directory(mixed_directory, create_subfolders=False)
-        
-        if not self.config or qa_test not in self.config:
-            print(f"{self.style.RED}No configuration found for QA test: {qa_test}{self.style.RESET}")
-            return {}
-        
-        test_config = self.config[qa_test]['sequences']
-        loaded_sequences = {}
-        
-        # Find and load each required sequence type
-        for role, seq_config in test_config.items():
-            target_echo = seq_config.get('echo_number', 1)
-            target_image_type = seq_config.get('image_type', 'magnitude').upper()
-            
-            # Find matching sorted group
-            matching_files = []
-            for sort_key, file_list in sorted_groups.items():
-                # Parse sort key: protocol_date_series_echo_imagetype
-                parts = sort_key.split('_')
-                if len(parts) >= 5:
-                    echo_str = parts[3]
-                    image_type = parts[4].upper()
-                    
-                    try:
-                        echo_num = float(echo_str)
-                        
-                        # Match by echo number and image type
-                        if (abs(echo_num - target_echo * 10) < 1 or  # TE in ms (e.g., 5.0 vs 50)
-                            abs(echo_num - target_echo) < 0.1) and \
-                           target_image_type in image_type:
-                            matching_files = file_list
-                            print(f"{self.style.GREEN}Found {role}: {len(file_list)} files (TE={echo_num}, type={image_type}){self.style.RESET}")
-                            break
-                    except ValueError:
-                        continue
-            
-            # Load the matching files
-            if matching_files:
-                try:
-                    data, metadata, export_error = self.load_dicom_series(matching_files)
-                    loaded_sequences[role] = (data, metadata, export_error)
-                except Exception as e:
-                    print(f"{self.style.RED}Error loading {role}: {e}{self.style.RESET}")
-            else:
-                print(f"{self.style.YELLOW}Warning: Could not find files for {role} (TE{target_echo}, {target_image_type}){self.style.RESET}")
-        
-        return loaded_sequences
 
 
 def get_bit_depth_max_value(bits_stored: int) -> int:
     """
     Get maximum value for given bit depth.
-    
+
     Args:
         bits_stored: Number of bits stored in DICOM
-        
+
     Returns:
         Maximum value for the bit depth
     """
@@ -589,7 +542,7 @@ def get_bit_depth_max_value(bits_stored: int) -> int:
 def save_results_to_file(results: dict, output_path: str, filename: str = 'analysis_results.txt'):
     """
     Save analysis results to text file.
-    
+
     Args:
         results: Dictionary of result names and values
         output_path: Directory to save results
@@ -597,11 +550,11 @@ def save_results_to_file(results: dict, output_path: str, filename: str = 'analy
     """
     names = np.array(list(results.keys()))
     values = np.array(list(results.values()))
-    
+
     structured_array = np.zeros(names.size, dtype=[('var1', 'U50'), ('var2', float)])
     structured_array['var1'] = names
     structured_array['var2'] = values
-    
+
     output_file = os.path.join(output_path, filename)
     np.savetxt(output_file, structured_array, fmt='%30s %10.5f')
     print(f'Results saved to: {output_file}')
