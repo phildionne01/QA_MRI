@@ -82,10 +82,15 @@
   "ghost_ratio": {
     "description": "Ghost Ratio Analysis",
     "sequences": {
-      "epi_ghost": {
-        "sequence_patterns": ["epi_ghost", "ep2d_ghost", "nyquist_ghost"],
+      "epi": {
+        "sequence_patterns": ["ep2d_fid_distorsion_geo"],
         "image_type": "magnitude",
-        "description": "EPI sequence for ghost ratio measurement"
+        "description": "EPI sequence for ghosting ratio measurement"
+      },
+      "tse": {
+        "sequence_patterns": ["t2_tse_tra_5mm"],
+        "image_type": "magnitude",
+        "description": "TSE sequence for ghosting ratio comparison"
       }
     }
   }

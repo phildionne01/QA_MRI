@@ -1,229 +1,358 @@
 import matplotlib.pyplot as plt
-import pydicom as dcm
 import numpy as np
-import os
-from roipoly import *
-import tkinter as tk 
-from tkinter import filedialog
-
-reuse_masks=0
-
-# Group of Different functions for different styles
-os.system("") #This section of code is just to change the color that appears in the command window
-class style():
-    BLACK = '\033[30m'
-    RED = '\033[31m'
-    GREEN = '\033[32m'
-    YELLOW = '\033[33m'
-    BLUE = '\033[34m'
-    MAGENTA = '\033[35m'
-    CYAN = '\033[36m'
-    WHITE = '\033[37m'
-    UNDERLINE = '\033[4m'
-    RESET = '\033[0m'
-
-print(style.YELLOW + 'Select the directory containing the correct dataset to analyze' + style.RESET)
-
-root = tk.Tk() 
-root.withdraw() 
-PathDicom = filedialog.askdirectory()
-
-lstFilesDCM = []  # create an empty list
-for dirName, subdirList, fileList in os.walk(PathDicom):
-    for filename in fileList:
-        if ".dcm" in filename.lower():  # check whether the file's DICOM
-            lstFilesDCM.append(os.path.join(dirName,filename))
-
-RefDs = dcm.read_file(lstFilesDCM[0])
-if RefDs.StationName =='AWP183025':
-  sl=20 #I don't know why the slices don't get ordered the same for both MRI scanners
-else:
-  sl=20
-
-for f in range(len(lstFilesDCM)):
-  RefDs = dcm.read_file(lstFilesDCM[f])
-
-  filename = RefDs.SOPInstanceUID
-  #print('filename ...', filename)
-
-  instNum = RefDs.InstanceNumber
-  #print('instNum ...', instNum)
-  
-  if int(instNum) == sl:
-#     file_path = PathDicom +'/MR'+ filename + '.dcm'
-     x = lstFilesDCM[f].split('\\')
-     file = x[len(x)-1]  # last item
-     file_path = PathDicom +'/'+ file
-     print('file_pathEPI=', file_path)
-     #ds=dcm.read_file(filenameDCM)
-     im=RefDs.pixel_array
-# Get ref file
+import cv2
+from mri_utils import DicomReader, ConsoleStyle, save_results_to_file
 
 
-# Load dimensions based on the number of rows, columns, and slices (along the Z axis)
-ConstPixelDims = (int(RefDs.Rows), int(RefDs.Columns), len(lstFilesDCM))
+def detect_phantom_and_create_rois(image, center_roi_radius_fraction=0.8, background_roi_size=None):
+    """
+    Automatically detect the phantom in the image and create ROIs.
 
-# Load spacing values (in mm)
-ConstPixelSpacing = (float(RefDs.PixelSpacing[0]), float(RefDs.PixelSpacing[1]), float(RefDs.SliceThickness))
+    Args:
+        image: 2D numpy array of the MRI slice
+        center_roi_radius_fraction: Fraction of phantom radius for center ROI (default: 0.8)
+        background_roi_size: Size of background ROI boxes in pixels (auto-calculated if None)
 
-x = np.arange(0.0, (ConstPixelDims[0]+1)*ConstPixelSpacing[0], ConstPixelSpacing[0])
-y = np.arange(0.0, (ConstPixelDims[1]+1)*ConstPixelSpacing[1], ConstPixelSpacing[1])
-z = np.arange(0.0, (ConstPixelDims[2]+1)*ConstPixelSpacing[2], ConstPixelSpacing[2])
-'''
-# The array is sized based on 'ConstPixelDims'
-ArrayDicom = np.zeros(ConstPixelDims, dtype=RefDs.pixel_array.dtype)
+    Returns:
+        Dictionary containing masks for center, top, bottom, left, right ROIs
+    """
+    # Normalize image to 8-bit for OpenCV processing
+    img_normalized = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-# loop through all the DICOM files
-for filenameDCM in lstFilesDCM:
-    # read the file
-    ds = dcm.read_file(filenameDCM)
-    # store the raw image data
-    ArrayDicom[:, :, lstFilesDCM.index(filenameDCM)] = ds.pixel_array  
-print('MRI dataset size:....', np.shape(ArrayDicom))
-im=np.squeeze(ArrayDicom[:, :, 9])
-#plt.figure(dpi=300)
-#plt.axes().set_aspect('equal', 'datalim')
-#plt.set_cmap(plt.gray())
-#plt.pcolormesh(x, y, np.flipud(ArrayDicom[:, :, 1]))
-'''
+    # Apply Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(img_normalized, (5, 5), 0)
+
+    # Use Otsu's thresholding to segment the phantom
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Morphological operations to clean up the mask
+    kernel = np.ones((5, 5), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # Find contours
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Find the largest contour (should be the phantom)
+    if not contours:
+        raise ValueError("No phantom contour detected in the image")
+
+    largest_contour = max(contours, key=cv2.contourArea)
+
+    # Get the minimum enclosing circle
+    (cx, cy), radius = cv2.minEnclosingCircle(largest_contour)
+    cx, cy, radius = int(cx), int(cy), int(radius)
+
+    # Calculate ROI sizes based on phantom size
+    center_roi_radius = int(radius * center_roi_radius_fraction)
+    if background_roi_size is None:
+        # Make background ROI size proportional to phantom radius (about 15% of phantom radius)
+        background_roi_size = max(10, int(radius * 0.15))
+
+    # Create masks for ROIs
+    masks = {}
+    img_height, img_width = image.shape
+
+    # Center ROI - circular in the center of the phantom
+    masks['center'] = np.zeros(image.shape, dtype=bool)
+    y_coords, x_coords = np.ogrid[:img_height, :img_width]
+    center_circle = (x_coords - cx)**2 + (y_coords - cy)**2 <= center_roi_radius**2
+    masks['center'] = center_circle
+
+    # Background ROIs - rectangular, positioned outside the phantom
+    # Margin to ensure ROIs are clearly outside the phantom
+    margin = int(radius * 0.15)  # 15% margin beyond phantom edge
+    half_roi = background_roi_size // 2
+
+    # Top ROI - rectangular
+    top_y_center = max(cy - radius - margin - half_roi, half_roi)
+    top_y_start = max(top_y_center - half_roi, 0)
+    top_y_end = min(top_y_center + half_roi, img_height)
+    masks['top'] = np.zeros(image.shape, dtype=bool)
+    masks['top'][top_y_start:top_y_end, cx-half_roi:cx+half_roi] = True
+
+    # Bottom ROI - rectangular
+    bottom_y_center = min(cy + radius + margin + half_roi, img_height - half_roi)
+    bottom_y_start = max(bottom_y_center - half_roi, 0)
+    bottom_y_end = min(bottom_y_center + half_roi, img_height)
+    masks['bottom'] = np.zeros(image.shape, dtype=bool)
+    masks['bottom'][bottom_y_start:bottom_y_end, cx-half_roi:cx+half_roi] = True
+
+    # Left ROI - rectangular
+    left_x_center = max(cx - radius - margin - half_roi, half_roi)
+    left_x_start = max(left_x_center - half_roi, 0)
+    left_x_end = min(left_x_center + half_roi, img_width)
+    masks['left'] = np.zeros(image.shape, dtype=bool)
+    masks['left'][cy-half_roi:cy+half_roi, left_x_start:left_x_end] = True
+
+    # Right ROI - rectangular
+    right_x_center = min(cx + radius + margin + half_roi, img_width - half_roi)
+    right_x_start = max(right_x_center - half_roi, 0)
+    right_x_end = min(right_x_center + half_roi, img_width)
+    masks['right'] = np.zeros(image.shape, dtype=bool)
+    masks['right'][cy-half_roi:cy+half_roi, right_x_start:right_x_end] = True
+
+    return masks, (cx, cy, radius)
 
 
-if reuse_masks==0:
- plt.imshow(im, cmap=plt.cm.gray) #Draw a first ROI
- print('Draw an ROI at the centre of the phantom')
- ROI1 = RoiPoly(color='r')
- ROI1.show_figure()
- centre=ROI1.get_mean_and_std(im)
- mask1=ROI1.get_mask(im)
+def calculate_ghosting_ratio(image, masks):
+    """
+    Calculate ghosting ratio from image and ROI masks.
 
- plt.imshow(im, cmap=plt.cm.gray) #Draw the second ROI
- ROI1.display_roi()
- ROI1.display_mean(im)
- print('Draw an ROI to the left of the phantom')
- ROI2 = RoiPoly(color='b')
- ROI2.show_figure()
- left=ROI2.get_mean_and_std(im)
- mask2=ROI2.get_mask(im)
+    Args:
+        image: 2D numpy array of the MRI slice
+        masks: Dictionary containing masks for center, top, bottom, left, right
 
- plt.imshow(im, cmap=plt.cm.gray) #Draw the third ROI
- ROI1.display_roi()
- ROI1.display_mean(im)
- ROI2.display_roi()
- ROI2.display_mean(im)
- print('Draw a ROI to the right of the phantom')
- ROI3 = RoiPoly(color='g')
- ROI3.show_figure()
- right=ROI3.get_mean_and_std(im)
- mask3=ROI3.get_mask(im)
+    Returns:
+        Dictionary containing mean signals and ghosting ratio
+    """
+    # Calculate mean signal in each ROI
+    centre = np.mean(image[masks['center']])
+    top = np.mean(image[masks['top']])
+    bottom = np.mean(image[masks['bottom']])
+    left = np.mean(image[masks['left']])
+    right = np.mean(image[masks['right']])
 
- plt.imshow(im, cmap=plt.cm.gray) #Draw the fourth ROI
- ROI1.display_roi()
- ROI1.display_mean(im)
- ROI2.display_roi()
- ROI2.display_mean(im)
- ROI3.display_roi()
- ROI3.display_mean(im)
- print('Draw a ROI above the top edge of the phantom')
- ROI4 = RoiPoly(color='m')
- ROI4.show_figure()
- top=ROI4.get_mean_and_std(im)
- mask4=ROI4.get_mask(im)
+    # Calculate ghosting ratio
+    ghosting_ratio = np.abs((top + bottom) - (left + right)) / (2 * centre) * 100
+
+    results = {
+        'centre': centre,
+        'top': top,
+        'bottom': bottom,
+        'left': left,
+        'right': right,
+        'ghosting_ratio': ghosting_ratio
+    }
+
+    return results
 
 
- plt.imshow(im, cmap=plt.cm.gray) #Draw the fifth ROI
- ROI1.display_mean(im)
- ROI1.display_roi()
- ROI2.display_mean(im)
- ROI2.display_roi()
- ROI3.display_mean(im)
- ROI3.display_roi()
- ROI4.display_mean(im)
- ROI4.display_roi()
- print('Draw a ROI below the bottom edge of the phantom')
- ROI5 = RoiPoly(color='c')
- ROI5.show_figure()
- bot=ROI5.get_mean_and_std(im)
- mask5=ROI5.get_mask(im)
+def visualize_rois(image, masks, phantom_info, results, title="ROI Visualization"):
+    """
+    Visualize the image with ROI overlays and results.
 
- plt.imshow(im, cmap=plt.cm.gray) #Show all the final ROIs, displaying the ave and standard deviations
- ROI1.display_mean(im)
- ROI1.display_roi()
- ROI2.display_mean(im)
- ROI2.display_roi()
- ROI3.display_mean(im)
- ROI3.display_roi()
- ROI4.display_mean(im)
- ROI4.display_roi()
- ROI5.display_mean(im)
- ROI5.display_roi()
+    Args:
+        image: 2D numpy array of the MRI slice
+        masks: Dictionary containing masks for all ROIs
+        phantom_info: Tuple of (center_x, center_y, radius)
+        results: Dictionary containing calculated results
+        title: Plot title
 
- plt.savefig(PathDicom + '/ROIs.png')
- plt.show()
+    Returns:
+        matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.imshow(image, cmap='gray')
 
- np.savetxt('mask1.txt', mask1, fmt='%d')
- np.savetxt('mask2.txt', mask2, fmt='%d')
- np.savetxt('mask3.txt', mask3, fmt='%d')
- np.savetxt('mask4.txt', mask4, fmt='%d')
- np.savetxt('mask5.txt', mask5, fmt='%d')
+    # Draw phantom circle
+    cx, cy, radius = phantom_info
+    circle = plt.Circle((cx, cy), radius, color='yellow', fill=False, linewidth=2, label='Phantom')
+    ax.add_patch(circle)
 
- GhostingRatio=np.abs((top[0]+bot[0])-(left[0]+right[0]))/(2*centre[0])*100
- print(style.YELLOW + 'Mean signal=', centre[0])
- print('Top signal=', top[0])
- print('Bottom signal=', bot[0])
- print('Left signal=', left[0])
- print('Right signal=', right[0])
- print('Ghosting radio=', GhostingRatio)
+    # Draw ROIs with different colors
+    colors = {'center': 'red', 'top': 'magenta', 'bottom': 'cyan', 'left': 'blue', 'right': 'green'}
+    # Map mask keys to result keys
+    result_key_map = {'center': 'centre', 'top': 'top', 'bottom': 'bottom', 'left': 'left', 'right': 'right'}
 
- floats=np.array([centre[0], top[0], bot[0], left[0], right[0], GhostingRatio])
- names=np.array(['Mean_signal=', 'Top_signal=', 'Bottom_signal=', 'Left_signal=', 'Right_signal=', 'GhostingRatio='])
- ab=np.zeros(names.size, dtype=[('var1', 'U14'), ('var2', float)])
- ab['var1'] = names
- ab['var2'] = floats
- np.savetxt(PathDicom + '/GhostingRatio.txt', ab, fmt='%20s %10.5f') 
+    for roi_name, color in colors.items():
+        # Find bounding box of the ROI
+        y_coords, x_coords = np.where(masks[roi_name])
+        if len(y_coords) > 0:
+            result_key = result_key_map[roi_name]
 
-elif reuse_masks==1:
- mask1=np.loadtxt('mask1.txt', dtype=int)
- mask2=np.loadtxt('mask2.txt', dtype=int)
- mask3=np.loadtxt('mask3.txt', dtype=int)
- mask4=np.loadtxt('mask4.txt', dtype=int)
- mask5=np.loadtxt('mask5.txt', dtype=int)
- im1=im*mask1
- im1=im1.flatten()
- centre=np.mean(im1[im1!=0])
+            if roi_name == 'center':
+                # Draw circle for center ROI
+                y_center = (y_coords.min() + y_coords.max()) / 2
+                x_center = (x_coords.min() + x_coords.max()) / 2
+                roi_radius = (x_coords.max() - x_coords.min()) / 2
+                center_circle = plt.Circle((x_center, y_center), roi_radius,
+                                          edgecolor=color, facecolor='none', linewidth=2,
+                                          label=f'{roi_name.capitalize()}: {results[result_key]:.1f}')
+                ax.add_patch(center_circle)
+            else:
+                # Draw rectangle for background ROIs
+                y_min, y_max = y_coords.min(), y_coords.max()
+                x_min, x_max = x_coords.min(), x_coords.max()
+                rect = plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min,
+                                    edgecolor=color, facecolor='none', linewidth=2,
+                                    label=f'{roi_name.capitalize()}: {results[result_key]:.1f}')
+                ax.add_patch(rect)
 
- im2=im*mask2
- im2=im2.flatten()
- left=np.mean(im2[im2!=0])
- 
- im3=im*mask3
- im3=im3.flatten()
- right=np.mean(im3[im3!=0])
+    ax.set_title(f'{title}\nGhosting Ratio: {results["ghosting_ratio"]:.2f}%', fontsize=14)
+    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.axis('off')
+    plt.tight_layout()
 
- im4=im*mask4
- im4=im4.flatten()
- top=np.mean(im4[im4!=0])
- 
- im5=im*mask5
- im5=im5.flatten()
- bot=np.mean(im5[im5!=0])
+    return fig
 
- GhostingRatio=np.abs((top+bot)-(left+right))/(2*centre)*100
- print(style.YELLOW + 'Mean signal=', centre)
- print('Top signal=', top)
- print('Bottom signal=', bot)
- print('Left signal=', left)
- print('Right signal=', right)
- print('Ghosting radio=', GhostingRatio)
- 
- floats=np.array([centre, top, bot, left, right, GhostingRatio])
- names=np.array(['Mean_signal=', 'Top_signal=', 'Bottom_signal=', 'Left_signal=', 'Right_signal=', 'GhostingRatio='])
- ab=np.zeros(names.size, dtype=[('var1', 'U14'), ('var2', float)])
- ab['var1'] = names
- ab['var2'] = floats
- np.savetxt(PathDicom + '/GhostingRatio.txt', ab, fmt='%20s %10.5f')
 
-if GhostingRatio <= 3: #The threshold for this test is set at 3%
-	print(style.WHITE + 'QA test status...:'+ style.GREEN + 'pass' + style.RESET)
-else:
-	print(style.WHITE + 'QA test status...:'+ style.RED + 'fail'+ style.RESET)
+def process_sequence(dicom_array, slice_number, sequence_name, output_dir,
+                     center_roi_radius_fraction=0.25, background_roi_size=None, show_plot=True):
+    """
+    Process a single sequence to calculate ghosting ratio.
 
+    Args:
+        dicom_array: 3D numpy array of DICOM images
+        slice_number: Slice index to analyze
+        sequence_name: Name of the sequence (for output)
+        output_dir: Directory to save results
+        center_roi_radius_fraction: Fraction of phantom radius for center ROI
+        background_roi_size: Size of background ROI boxes (auto if None)
+        show_plot: Whether to display the plot interactively (default: True)
+
+    Returns:
+        Dictionary containing results
+    """
+    # Extract the specified slice
+    image = dicom_array[:, :, slice_number]
+
+    # Detect phantom and create ROIs
+    masks, phantom_info = detect_phantom_and_create_rois(image, center_roi_radius_fraction, background_roi_size)
+
+    # Calculate ghosting ratio
+    results = calculate_ghosting_ratio(image, masks)
+
+    # Visualize and save
+    fig = visualize_rois(image, masks, phantom_info, results,
+                        title=f"{sequence_name} - Slice {slice_number}")
+    fig.savefig(f'{output_dir}/{sequence_name}_ROIs.png', dpi=300, bbox_inches='tight')
+
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    # Save numerical results
+    save_data = {
+        f'{sequence_name}_Mean_signal': results['centre'],
+        f'{sequence_name}_Top_signal': results['top'],
+        f'{sequence_name}_Bottom_signal': results['bottom'],
+        f'{sequence_name}_Left_signal': results['left'],
+        f'{sequence_name}_Right_signal': results['right'],
+        f'{sequence_name}_GhostingRatio': results['ghosting_ratio']
+    }
+
+    return results, save_data
+
+
+def main():
+    import os
+    style = ConsoleStyle()
+
+    # Load config file
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'qa_sequences_config.json')
+    reader = DicomReader(config_file=config_path)
+
+    # Ask if user wants to display plots for QA
+    print(style.CYAN + "Do you want to display the ROI plots for QA purposes? (y/n): " + style.RESET, end='')
+    show_plots = input().strip().lower() in ['y', 'yes', '']
+
+    # Select directory containing DICOM data
+    print(style.YELLOW + 'Select the directory containing the DICOM datasets (EPI and TSE)' + style.RESET)
+    base_dir = reader.select_dicom_directory()
+
+    if not base_dir:
+        print(style.RED + "No directory selected. Exiting." + style.RESET)
+        return
+
+    # Use config-based sequence detection
+    print(style.CYAN + "\nSearching for ghost ratio sequences using configuration..." + style.RESET)
+    sequence_paths = reader.find_sequences_in_directory(base_dir, 'ghost_ratio')
+
+    # Initialize storage for both sequences
+    sequences = {}
+
+    # Map config keys to display names
+    sequence_name_map = {'epi': 'EPI', 'tse': 'TSE'}
+
+    # Load sequences found by config
+    for seq_key, seq_path in sequence_paths.items():
+        seq_name = sequence_name_map.get(seq_key, seq_key.upper())
+        print(style.CYAN + f"Loading {seq_name} sequence..." + style.RESET)
+        seq_files = reader.find_dicom_files(seq_path)
+        if seq_files:
+            seq_array, seq_metadata, seq_error = reader.load_dicom_series(seq_files)
+            sequences[seq_name] = {'array': seq_array, 'metadata': seq_metadata, 'path': seq_path}
+            print(style.GREEN + f"{seq_name} loaded: {seq_array.shape}" + style.RESET)
+        else:
+            print(style.RED + f"No {seq_name} DICOM files found" + style.RESET)
+
+    if not sequences:
+        print(style.RED + "No sequences loaded. Exiting." + style.RESET)
+        return
+
+    # Determine slice number based on station name (from original logic)
+    slice_number = 20  # Default
+    if 'EPI' in sequences:
+        station = sequences['EPI']['metadata'].get('station_name', '')
+        if station == 'AWP183025':
+            slice_number = 20
+        else:
+            slice_number = 20
+
+    print(style.CYAN + f"Analyzing slice: {slice_number}" + style.RESET)
+
+    # Process each sequence
+    all_results = {}
+    all_save_data = {}
+
+    for seq_name, seq_data in sequences.items():
+        print(style.YELLOW + f"\nProcessing {seq_name} sequence..." + style.RESET)
+
+        results, save_data = process_sequence(
+            seq_data['array'],
+            slice_number,
+            seq_name,
+            seq_data['path'],
+            center_roi_radius_fraction=0.8,
+            background_roi_size=None,  # Auto-calculated based on phantom size
+            show_plot=show_plots
+        )
+
+        all_results[seq_name] = results
+        all_save_data.update(save_data)
+
+        # Print results
+        print(style.YELLOW + f'\n{seq_name} Results:')
+        print(f'  Mean signal: {results["centre"]:.2f}')
+        print(f'  Top signal: {results["top"]:.2f}')
+        print(f'  Bottom signal: {results["bottom"]:.2f}')
+        print(f'  Left signal: {results["left"]:.2f}')
+        print(f'  Right signal: {results["right"]:.2f}')
+        print(f'  Ghosting Ratio: {results["ghosting_ratio"]:.2f}%' + style.RESET)
+
+        # Check pass/fail (threshold: 3%)
+        if results["ghosting_ratio"] <= 3:
+            print(style.WHITE + f'{seq_name} QA test status: ' + style.GREEN + 'PASS' + style.RESET)
+        else:
+            print(style.WHITE + f'{seq_name} QA test status: ' + style.RED + 'FAIL' + style.RESET)
+
+    # Compare sequences if both are available
+    if len(sequences) == 2:
+        print(style.CYAN + "\n=== Sequence Comparison ===" + style.RESET)
+        epi_ratio = all_results['EPI']['ghosting_ratio']
+        tse_ratio = all_results['TSE']['ghosting_ratio']
+        difference = abs(epi_ratio - tse_ratio)
+
+        print(f"EPI Ghosting Ratio: {epi_ratio:.2f}%")
+        print(f"TSE Ghosting Ratio: {tse_ratio:.2f}%")
+        print(f"Difference: {difference:.2f}%")
+
+        all_save_data['Comparison_Difference'] = difference
+
+        if difference < 1.0:
+            print(style.GREEN + "Sequences show consistent ghosting levels (difference < 1%)" + style.RESET)
+        elif difference < 2.0:
+            print(style.YELLOW + "Moderate difference between sequences (1-2%)" + style.RESET)
+        else:
+            print(style.RED + "Significant difference between sequences (> 2%)" + style.RESET)
+
+    # Save combined results
+    save_results_to_file(all_save_data, base_dir, 'GhostingRatio_Combined.txt')
+
+    print(style.GREEN + f"\n✓ Analysis complete! Results saved to {base_dir}" + style.RESET)
+
+
+if __name__ == "__main__":
+    main()
