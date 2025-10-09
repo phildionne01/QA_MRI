@@ -2,7 +2,7 @@ import numpy as np
 import os
 import pydicom as dcm
 import matplotlib.pyplot as plt
-import tkinter as tk 
+import tkinter as tk
 from tkinter import filedialog
 from scipy import ndimage
 from scipy.fftpack import fft, fftshift, fftfreq
@@ -22,8 +22,8 @@ class style():
 
 print(style.YELLOW + 'Select the directory containing the correct dataset to analyze'+ style.RESET)
 
-root = tk.Tk() 
-root.withdraw() 
+root = tk.Tk()
+root.withdraw()
 PathDicom = filedialog.askdirectory()
 lstFilesDCM = []  # create an empty list
 for dirName, subdirList, fileList in os.walk(PathDicom):
@@ -71,7 +71,7 @@ for filenameDCM in lstFilesDCM:
      AcquisitionNumber=int(ds.AcquisitionNumber)
      SliceNumber=TotalSliceNumber-((AcquisitionNumber * TotalSliceNumber)-InstanceNum)
      ArrayDicom[:, :, SliceNumber-1, AcquisitionNumber-1] = ds.pixel_array
-    
+
 print('MRI dataset size:....', np.shape(ArrayDicom))
 
 arr0=np.squeeze(ArrayDicom[:,:,sl,:])
@@ -93,7 +93,7 @@ for j in range(z): #Separate even and odd images in the time series
   if np.fmod(j,2)==0:
    i=np.uint16(j/2)
    temp_even[:,:,i]=arr[:,:,j]
-  elif np.fmod(j,2)!=0: 
+  elif np.fmod(j,2)!=0:
    i=np.uint16((j-1)/2)
    temp_odd[:,:,i]=arr[:,:,j]
 
@@ -172,13 +172,16 @@ print(style.YELLOW + "Percent Drift = " + style.GREEN, Drift)
 print(style.YELLOW + "Percent fluctuation =" + style.GREEN, Percent_fluc)
 print(style.RESET)
 
-fig, ax=plt.subplots(2,1)
-ax[0].plot(x_val, ave_series, x_val, poly_roi(x_val), label="Ave signal time series")
+fig, ax=plt.subplots(2, 1, figsize=(12, 10))  # Increase figure size
+ax[0].plot(x_val, ave_series, label="Average signal time series")
+ax[0].plot(x_val, poly_roi(x_val), label=f"Polynomial fit (Drift: {Drift:.2f}%, Fluctuation: {Percent_fluc:.2f}%)")
 ax[0].set(xlabel="Volume #", ylabel="Ave intensity", title="ROI Signal Drift")
-ax[1].plot(vec[0:np.uint16(z/2)],np.abs(fft_residuals[np.uint16(z/2):]),label="Noise magnitude spectrum")
-ax[1].set(xlabel="freq", ylabel="magnitude", title="Noise magnitude spectrum")
+ax[0].legend()
+ax[1].plot(vec[0:np.uint16(z/2)], np.abs(fft_residuals[np.uint16(z/2):]), label="Noise Magnitude Spectrum")
+ax[1].set(xlabel="Frequency (Hz)", ylabel="Magnitude", title="Noise Magnitude Spectrum")
 ax[1].grid()
-fig.savefig(PathDicom + '/Curve_fit&fft.png')
+ax[1].legend()
+fig.savefig(PathDicom + '/Curve_fit&fft.png', dpi=300)
 #plt.show()
 plt.close(fig)
 
@@ -187,7 +190,7 @@ plt.close(fig)
 print("Click to select the ROI location")
 plt.imshow(arr[:,:,0], cmap=plt.cm.bone)
 x=np.uint16(plt.ginput(1))
-c=x[0,0] 
+c=x[0,0]
 r=x[0,1]
 plt.close()
 
@@ -318,7 +321,7 @@ ax.legend()
 fig.savefig(PathDicom + '/Weisskoff_Plot.png')
 plt.close(fig)
 
-floats=np.array([SFNR_val, SNR, Percent_fluc, Drift, RDC, SNR0])
+floats=np.array([float(SFNR_val), float(SNR), float(Percent_fluc), float(Drift), float(RDC), float(SNR0)])
 names=np.array(['SFNR=','SNR=', 'Percent_fluctuation=', 'Percent_drift=', 'RDC=', 'SNR_Weisskoff='])
 ab=np.zeros(names.size, dtype=[('var1', 'U20'), ('var2', float)])
 ab['var1'] = names

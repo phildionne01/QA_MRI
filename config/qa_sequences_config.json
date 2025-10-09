@@ -41,7 +41,7 @@
     "description": "EPI Stability Analysis",
     "sequences": {
       "epi_series": {
-        "sequence_patterns": ["ep2d_fid_basic_long_term_stability"],
+        "sequence_patterns": ["ep2d_fid_basic_long_term_stab"],
         "image_type": "magnitude",
         "description": "EPI time series for stability analysis"
       }

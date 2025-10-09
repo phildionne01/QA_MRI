@@ -5,7 +5,7 @@ from skimage.restoration import unwrap_phase
 from mri_utils import DicomReader, get_bit_depth_max_value, save_results_to_file
 
 # Initialize reader with configuration
-config_file = 'code/qa_sequences_config.json'
+config_file = 'config/qa_sequences_config.json'
 reader = DicomReader(config_file)
 
 # Load all required sequences automatically
@@ -124,10 +124,18 @@ axs[2, 1].set_title('B0 map sag')
 fig = plt.gcf()
 fig.set_size_inches(7, 9)
 plt.savefig(base_dir + '/Images.png', dpi=300)
-plt.show()
+# plt.show()
 plt.close()
 
-plt.hist(DeltaB0.flatten(), hist_bins)
-plt.title('B0 inhomogeneity in ppm')
-plt.savefig(base_dir + '/DeltaB0hist.png')
-plt.show()
+plt.hist(DeltaB0.flatten(), hist_bins, label=(
+    f'RMS={DeltaB0rms:.3f} ppm\n'
+    f'Mean={DeltaB0mean:.3f} $\pm$ {DeltaB0std:.3f} ppm\n'
+    f'peak-to-peak={DeltaB0pk2pk:.3f} ppm'
+))
+plt.title('B0 Homogeneity')
+plt.xlabel('Delta B0 [ppm]')
+plt.ylabel('Number of voxels')
+plt.legend(frameon=False)
+plt.savefig(base_dir + '/DeltaB0hist.png', dpi=300)
+plt.figure(figsize=(6, 4))
+# plt.show()
